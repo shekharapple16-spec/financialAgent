@@ -1,8 +1,10 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+import traceback
 
 from .tools.financial_analyzer import analyze_financial_pdf
 from .mcp_server import register_tools
@@ -16,7 +18,16 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Financial Chart Agent")
 
-# Enable CORS for better compatibility
+# Add exception handler for better error reporting
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"error": str(exc), "detail": traceback.format_exc()},
+    )
+
+# Enable CORS for better compatibility - MUST be added after exception handler
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

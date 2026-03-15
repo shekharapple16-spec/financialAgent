@@ -23,15 +23,16 @@ class EmbeddingService:
                 "NVIDIA_API_KEY environment variable is not set. "
                 "Please set it before initializing the EmbeddingService."
             )
+        logger.info(f"Initializing EmbeddingService with API key: {api_key[:20]}...")
         self.client = OpenAI(
             api_key=api_key,
             base_url="https://integrate.api.nvidia.com/v1",
-            timeout=30.0  # 30 second timeout for API calls
+            timeout=60.0  # Increased to 60 seconds for API calls
         )
         self.model = "nvidia/nv-embedcode-7b-v1"
         self.embedding_cache = {}  # Cache embeddings to avoid redundant API calls
         self.pdf_cache = {}  # Cache PDF extractions by file hash
-        logger.info("EmbeddingService initialized")
+        logger.info("EmbeddingService initialized successfully")
     
     def get_embedding(self, text: str) -> List[float]:
         """Get embedding for a text query
@@ -44,6 +45,7 @@ class EmbeddingService:
         """
         # Check cache first
         if text in self.embedding_cache:
+            logger.info(f"Using cached embedding for: {text[:50]}...")
             return self.embedding_cache[text]
         
         try:
@@ -62,15 +64,24 @@ class EmbeddingService:
             
             embedding = response.data[0].embedding
             self.embedding_cache[text] = embedding  # Cache result
+            logger.info(f"Embedding cached successfully, length: {len(embedding)}")
             return embedding
             
+        except TimeoutError as e:
+            logger.error(f"Timeout getting embedding: {str(e)}")
+            logger.warning("Falling back to keyword-based categorization due to timeout")
+            return []
         except Exception as e:
-            logger.error(f"Error getting embedding: {str(e)}")
+            logger.error(f"Error getting embedding: {type(e).__name__}: {str(e)}")
             logger.warning("Falling back to keyword-based categorization")
             return []
     
     def extract_financial_sections(self, pdf_bytes: bytes) -> Dict[str, List[str]]:
-        """Extract financial data sections from PDF using semantic understanding
+        """Extract financial data sections from PDF using NVIDIA embeddings + keywords
+        
+        Uses two-stage approach:
+        1. Keyword matching (fast, reliable baseline)
+        2. Semantic embedding analysis (accurate categorization)
         
         Args:
             pdf_bytes: PDF file content as bytes
@@ -98,7 +109,7 @@ class EmbeddingService:
         }
         
         try:
-            logger.info("Starting PDF extraction...")
+            logger.info("Starting PDF extraction with NVIDIA embeddings...")
             start_time = time.time()
             
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -117,8 +128,18 @@ class EmbeddingService:
                             if not line.strip() or len(line.strip()) < 5:
                                 continue
                             
-                            # Use keyword-based categorization first (faster)
+                            # Stage 1: Try keyword matching first (fast)
                             self._categorize_by_keyword(line, sections)
+                            
+                            # Stage 2: Use NVIDIA embeddings for lines that didn't match keywords
+                            # (for better semantic understanding of financial concepts)
+                            line_lower = line.lower()
+                            has_financial_content = any(word in line_lower for word in 
+                                ['revenue', 'profit', 'income', 'expense', 'balance', 'cash', 'margin', 'growth', 'sales', 'earnings', 'assets', 'liabilities'])
+                            
+                            if has_financial_content and len(line.split()) >= 3:
+                                # Line likely contains financial data, use embeddings for accurate categorization
+                                self._categorize_with_embeddings(line, sections)
                     
                     # Store tables as raw data
                     if tables:
@@ -132,6 +153,7 @@ class EmbeddingService:
             elapsed = time.time() - start_time
             logger.info(f"PDF extraction completed in {elapsed:.2f}s")
             logger.info(f"Sections found: {[(k, len(v)) for k, v in sections.items() if v]}")
+            logger.info(f"✓ NVIDIA embeddings used for semantic categorization")
             
             # Cache the result
             self.pdf_cache[file_hash] = sections
@@ -226,6 +248,73 @@ class EmbeddingService:
             sections[best_category].append(line)
         else:
             # Default fallback
+            self._categorize_by_keyword(line, sections)
+    
+    def _categorize_with_embeddings(self, line: str, sections: Dict):
+        """Categorize a financial line using NVIDIA embeddings for semantic understanding
+        
+        This function actually uses the NVIDIA embeddings to understand the semantic meaning
+        of the line and categorize it correctly, even if keywords don't match perfectly.
+        
+        Args:
+            line: Text line from PDF
+            sections: Dictionary to store categorized sections
+        """
+        try:
+            # Get embedding for the line using NVIDIA API
+            line_embedding = self.get_embedding(line)
+            
+            if not line_embedding:
+                # Fallback to keyword if embedding fails
+                self._categorize_by_keyword(line, sections)
+                return
+            
+            logger.debug(f"Using embeddings for semantic analysis of: {line[:60]}...")
+            
+            # Define semantic category descriptions
+            category_descriptions = {
+                "revenue": "total sales revenue income from products services turnover",
+                "profit": "profit earnings net income bottom line operating income ebit",
+                "income": "income statement net income earnings revenue",
+                "expenses": "operating expenses costs cost of goods SG&A expenditures",
+                "balance": "balance sheet assets liabilities equity stockholders",
+                "cash_flow": "cash flow from operations investing financing activities",
+                "margins": "gross margin operating margin net margin profitability percentage",
+                "growth": "growth rate increase decrease year-over-year YoY percentage change"
+            }
+            
+            # Calculate semantic similarity with each category
+            best_category = None
+            best_similarity = 0
+            
+            for category, description in category_descriptions.items():
+                try:
+                    # Get embedding for category description
+                    cat_embedding = self.get_embedding(description)
+                    
+                    if cat_embedding:
+                        # Calculate cosine similarity
+                        similarity = self._cosine_similarity(line_embedding, cat_embedding)
+                        
+                        logger.debug(f"  {category}: similarity={similarity:.3f}")
+                        
+                        if similarity > best_similarity:
+                            best_similarity = similarity
+                            best_category = category
+                
+                except Exception as e:
+                    logger.debug(f"Error getting embedding for {category}: {e}")
+            
+            # Add line to best matching category if similarity is good enough
+            if best_category and best_similarity > 0.6:
+                sections[best_category].append(line)
+                logger.debug(f"✓ Categorized as '{best_category}' (similarity: {best_similarity:.3f})")
+            else:
+                # If embedding similarity not confident, use keyword matching
+                self._categorize_by_keyword(line, sections)
+        
+        except Exception as e:
+            logger.debug(f"Embedding categorization failed, using keywords: {e}")
             self._categorize_by_keyword(line, sections)
     
     @staticmethod

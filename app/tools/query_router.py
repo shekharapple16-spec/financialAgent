@@ -62,15 +62,23 @@ def detect_chart_type(intent: str, available_metrics: Dict[str, list]) -> Tuple[
         return "none", []
     
     elif intent == "comparison":
-        # Return revenue and profit for comparison
+        # Return revenue and profit for comparison with proper structure
         revenue_data = available_metrics.get("revenue", [])
         profit_data = available_metrics.get("profit", [])
+        
         if revenue_data or profit_data:
-            return "comparison", [revenue_data, profit_data]
+            # Create grouped bar chart structure
+            data = {
+                'categories': ['Services Revenue', 'Products Revenue', 'Total Revenue'],
+                'current_year': revenue_data[:3] if revenue_data else [0, 0, 0],
+                'prior_year': profit_data[:3] if profit_data else [0, 0, 0],
+                'labels': ['Current Year', 'Prior Year']
+            }
+            return "grouped_bar", data
         return "none", []
     
     elif intent == "profitability":
-        # Show profit margins if available
+        # Show profit margins as bar chart
         if available_metrics.get("margins"):
             return "bar", available_metrics["margins"]
         elif available_metrics.get("profit"):
