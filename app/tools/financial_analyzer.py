@@ -1,9 +1,13 @@
-from .query_router import detect_intent
+from .query_router import detect_intent, detect_chart_type
 from .chart_generator import generate_chart
+from .embedding_service import EmbeddingService
 
 import pdfplumber
 import io
 import re
+
+
+embedding_service = EmbeddingService()
 
 
 def analyze_financial_pdf(query, pdf_bytes):
@@ -17,85 +21,107 @@ def analyze_financial_pdf(query, pdf_bytes):
         Dictionary with analysis results including charts and metrics
     """
     intent = detect_intent(query)
-
-    revenues = []
-    profits = []
-
-    try:
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-
-                if not text:
-                    continue
-
-                for line in text.split("\n"):
-                    # Extract revenue data
-                    if "revenue" in line.lower():
-                        numbers = re.findall(r"\d[\d,]*\.?\d*", line)
-                        revenues.extend(numbers)
-
-                    # Extract profit data
-                    if "profit" in line.lower():
-                        numbers = re.findall(r"\d[\d,]*\.?\d*", line)
-                        profits.extend(numbers)
-    except Exception as e:
+    
+    # Extract financial sections using semantic analysis
+    sections = embedding_service.extract_financial_sections(pdf_bytes)
+    
+    # Extract numbers from each section
+    metrics = {}
+    
+    # Process revenue section
+    if sections.get("revenue"):
+        numbers, labels = embedding_service.extract_numbers_from_lines(sections["revenue"])
+        if numbers:
+            metrics["revenue"] = numbers
+            metrics["revenue_labels"] = labels
+    
+    # Process profit section
+    if sections.get("profit"):
+        numbers, labels = embedding_service.extract_numbers_from_lines(sections["profit"])
+        if numbers:
+            metrics["profit"] = numbers
+            metrics["profit_labels"] = labels
+    
+    # Process income section
+    if sections.get("income"):
+        numbers, labels = embedding_service.extract_numbers_from_lines(sections["income"])
+        if numbers:
+            metrics["income"] = numbers
+            metrics["income_labels"] = labels
+    
+    # Process expenses section
+    if sections.get("expenses"):
+        numbers, labels = embedding_service.extract_numbers_from_lines(sections["expenses"])
+        if numbers:
+            metrics["expenses"] = numbers
+            metrics["expenses_labels"] = labels
+    
+    # Process margins section
+    if sections.get("margins"):
+        numbers, labels = embedding_service.extract_numbers_from_lines(sections["margins"])
+        if numbers:
+            metrics["margins"] = numbers
+            metrics["margins_labels"] = labels
+    
+    # Process growth section
+    if sections.get("growth"):
+        numbers, labels = embedding_service.extract_numbers_from_lines(sections["growth"])
+        if numbers:
+            metrics["growth"] = numbers
+            metrics["growth_labels"] = labels
+    
+    # Determine chart type based on intent and available metrics
+    chart_type, data_to_plot = detect_chart_type(intent, metrics)
+    
+    if chart_type == "none":
         return {
-            "error": f"Error processing PDF: {str(e)}",
-            "intent": intent
+            "message": "No relevant data found for your query",
+            "intent": intent,
+            "available_sections": list(sections.keys()),
+            "extracted_metrics": list(metrics.keys())
         }
-
-    # Convert extracted strings to floats for charting
-    try:
-        revenues = [float(r.replace(",", "")) for r in revenues]
-        profits = [float(p.replace(",", "")) for p in profits]
-    except ValueError:
-        pass
-
-    if intent == "revenue_growth":
-        if not revenues:
-            return {
-                "message": "No revenue data found in PDF",
-                "intent": intent
-            }
-        chart = generate_chart(revenues, "line")
-        return {
-            "chart": chart,
-            "metric": "revenue",
-            "data_points": len(revenues),
-            "intent": intent
-        }
-
-    if intent == "comparison":
-        if not revenues or not profits:
-            return {
-                "message": "Insufficient data for comparison",
-                "intent": intent
-            }
-        chart = generate_chart([revenues, profits], "comparison")
-        return {
-            "chart": chart,
-            "metrics": ["revenue", "profit"],
-            "intent": intent
-        }
-
-    if intent == "profit_trend":
-        if not profits:
-            return {
-                "message": "No profit data found in PDF",
-                "intent": intent
-            }
-        chart = generate_chart(profits, "line")
-        return {
-            "chart": chart,
-            "metric": "profit",
-            "data_points": len(profits),
-            "intent": intent
-        }
-
-    return {
-        "message": "Analysis complete",
-        "revenue_data_points": len(revenues),
-        "profit_data_points": len(profits),
-        "intent": intent
+    
+    # Generate appropriate chart
+    chart = generate_chart(data_to_plot, chart_type)
+    
+    result = {
+        "chart": chart,
+        "intent": intent,
+        "chart_type": chart_type,
+        "metrics_found": list(metrics.keys()),
+        "sections_analyzed": list(sections.keys())
     }
+    
+    # Add specific metric information based on intent
+    if intent == "revenue_growth":
+        result["metric"] = "revenue"
+        if "revenue" in metrics:
+            result["data_points"] = len(metrics["revenue"])
+            result["values"] = metrics["revenue"]
+    
+    elif intent == "profit_trend":
+        result["metric"] = "profit"
+        if "profit" in metrics:
+            result["data_points"] = len(metrics["profit"])
+            result["values"] = metrics["profit"]
+    
+    elif intent == "comparison":
+        result["metrics"] = ["revenue", "profit"]
+        if "revenue" in metrics:
+            result["revenue_data"] = metrics["revenue"]
+        if "profit" in metrics:
+            result["profit_data"] = metrics["profit"]
+    
+    elif intent == "profitability":
+        result["metric"] = "profitability"
+        if "margins" in metrics:
+            result["profit_margins"] = metrics["margins"]
+        if "profit" in metrics:
+            result["profit_values"] = metrics["profit"]
+    
+    elif intent == "growth_analysis":
+        result["metric"] = "growth"
+        if "growth" in metrics:
+            result["growth_data"] = metrics["growth"]
+    
+    return result

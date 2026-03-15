@@ -4,3 +4,4 @@ pdfplumber
 matplotlib
 python-multipart
 fastapi-mcp
+openai

@@ -2,3 +2,5 @@ __pycache__
 .env
 uploads
 venv
+*.md
+etst-embeddings.py
