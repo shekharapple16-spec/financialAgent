@@ -17,7 +17,12 @@ class EmbeddingService:
     """Service for semantic analysis using NVIDIA embeddings"""
     
     def __init__(self):
-        api_key = os.getenv("NVIDIA_API_KEY", "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")
+        api_key = os.getenv("NVIDIA_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "NVIDIA_API_KEY environment variable is not set. "
+                "Please set it before initializing the EmbeddingService."
+            )
         self.client = OpenAI(
             api_key=api_key,
             base_url="https://integrate.api.nvidia.com/v1",
