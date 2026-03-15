@@ -54,6 +54,40 @@ def register_tools(mcp):
             "upload_directory": str(uploads_dir)
         }
 
+    def upload_pdf_to_uploads(file_path: str):
+        """Upload a PDF file to the uploads directory by copying from a given path
+        
+        Args:
+            file_path: Path to the PDF file to upload (absolute or relative)
+        
+        Returns:
+            Confirmation message with filename
+        """
+        source_path = Path(file_path)
+        
+        if not source_path.exists():
+            return {"error": f"Source file not found: {file_path}"}
+        
+        if not source_path.suffix.lower() == '.pdf':
+            return {"error": "Only PDF files are allowed"}
+        
+        uploads_dir = Path(__file__).parent.parent / "uploads"
+        uploads_dir.mkdir(exist_ok=True)
+        
+        dest_path = uploads_dir / source_path.name
+        
+        try:
+            import shutil
+            shutil.copy2(source_path, dest_path)
+            return {
+                "message": f"File uploaded successfully",
+                "filename": source_path.name,
+                "location": str(dest_path),
+                "size_bytes": dest_path.stat().st_size
+            }
+        except Exception as e:
+            return {"error": f"Failed to upload file: {str(e)}"}
+
     def analyze_financial_pdf_mcp(query: str, file: str):
         """Analyze ANY financial PDF and return charts/metrics
         
@@ -102,6 +136,7 @@ def register_tools(mcp):
         # Check if it's a dict before trying to assign
         if isinstance(tools_attr, dict):
             tools_attr['list_available_pdfs'] = list_available_pdfs
+            tools_attr['upload_pdf_to_uploads'] = upload_pdf_to_uploads
             tools_attr['analyze_financial_pdf'] = analyze_financial_pdf_mcp
             tools_registered = True
     
@@ -111,6 +146,7 @@ def register_tools(mcp):
             # Try using decorator/registration method if available
             try:
                 mcp.tool()(list_available_pdfs)
+                mcp.tool()(upload_pdf_to_uploads)
                 mcp.tool()(analyze_financial_pdf_mcp)
                 tools_registered = True
             except:
@@ -120,6 +156,7 @@ def register_tools(mcp):
         if not tools_registered:
             try:
                 setattr(mcp, '_list_available_pdfs', list_available_pdfs)
+                setattr(mcp, '_upload_pdf_to_uploads', upload_pdf_to_uploads)
                 setattr(mcp, '_analyze_financial_pdf', analyze_financial_pdf_mcp)
             except:
                 pass

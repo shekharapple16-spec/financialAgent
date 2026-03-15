@@ -113,7 +113,7 @@ async def health():
 # Initialize MCP server - wrapped in try-except for compatibility
 try:
     from fastapi_mcp import FastApiMCP
-    mcp = FastApiMCP(app)
+    mcp = FastApiMCP(app, exclude_operations=["upload_pdf"])
     
     # Register MCP tools
     try:
