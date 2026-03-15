@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile
 from fastapi_mcp import FastApiMCP
 from pydantic import BaseModel
 from pathlib import Path
@@ -18,31 +18,97 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Create uploads directory if it doesn't exist
+uploads_dir = Path(__file__).parent.parent / "uploads"
+uploads_dir.mkdir(exist_ok=True)
+
 
 class AnalyzeRequest(BaseModel):
     query: str
-    file: str   # path to pdf
+    file: str   # PDF filename
+
+
+@app.post("/upload")
+async def upload_pdf(file: UploadFile = File(...)):
+    """Upload a PDF file to the uploads directory
+    
+    Args:
+        file: PDF file to upload
+    
+    Returns:
+        Confirmation with filename
+    """
+    if not file.filename.lower().endswith('.pdf'):
+        return {"error": "Only PDF files are allowed"}
+    
+    file_path = uploads_dir / file.filename
+    
+    try:
+        contents = await file.read()
+        file_path.write_bytes(contents)
+        return {
+            "message": f"File uploaded successfully",
+            "filename": file.filename,
+            "location": str(file_path),
+            "size_bytes": len(contents)
+        }
+    except Exception as e:
+        return {"error": f"Failed to upload file: {str(e)}"}
 
 
 @app.post("/analyze", operation_id="analyze_financial_pdf")
 async def analyze(req: AnalyzeRequest):
-    """REST API endpoint for financial PDF analysis"""
-    # Resolve file path
-    pdf_path = Path(req.file)
+    """REST API endpoint for financial PDF analysis
     
-    # If relative path, try uploads directory
-    if not pdf_path.is_absolute():
-        uploads_path = Path(__file__).parent.parent / "uploads" / req.file
-        if uploads_path.exists():
-            pdf_path = uploads_path
+    Args:
+        query: Analysis query (e.g., 'revenue growth')
+        file: PDF filename in uploads directory
+    """
+    # Resolve file path from uploads directory
+    pdf_path = uploads_dir / req.file
+    
+    # Also try without extension if provided
+    if not pdf_path.exists() and not req.file.endswith('.pdf'):
+        pdf_path = uploads_dir / f"{req.file}.pdf"
     
     if not pdf_path.exists():
-        return {"error": f"File not found: {req.file}"}
+        return {
+            "error": f"File not found: {req.file}",
+            "upload_directory": str(uploads_dir)
+        }
 
-    contents = pdf_path.read_bytes()
-    result = analyze_financial_pdf(req.query, contents)
+    try:
+        contents = pdf_path.read_bytes()
+        result = analyze_financial_pdf(req.query, contents)
+        result["file_analyzed"] = pdf_path.name
+        return result
+    except Exception as e:
+        return {"error": f"Analysis failed: {str(e)}"}
 
-    return result
+
+@app.get("/pdfs")
+async def list_pdfs():
+    """List all available PDF files"""
+    if not uploads_dir.exists():
+        return {"pdfs": [], "count": 0}
+    
+    pdfs = [f.name for f in uploads_dir.glob("*.pdf")]
+    return {
+        "pdfs": sorted(pdfs),
+        "count": len(pdfs),
+        "directory": str(uploads_dir)
+    }
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "service": "Financial Chart Agent",
+        "uploads_directory": str(uploads_dir),
+        "mcp_endpoint": "/mcp"
+    }
 
 
 # Initialize MCP server
