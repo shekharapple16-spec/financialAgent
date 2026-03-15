@@ -118,7 +118,12 @@ try:
     # Register MCP tools
     try:
         register_tools(mcp)
-        mcp.mount()
+        if hasattr(mcp, 'mount'):
+            mcp.mount()
+    except (TypeError, AttributeError, KeyError) as e:
+        # Known issue: mcp.tools might be a list or have incompatible type
+        print(f"Warning: Could not mount MCP tools: {type(e).__name__}: {e}")
+        print("REST API endpoints will continue to work normally")
     except Exception as e:
         print(f"Warning: Could not mount MCP tools: {e}")
         print("REST API endpoints will continue to work normally")

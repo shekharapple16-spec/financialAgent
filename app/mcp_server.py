@@ -94,6 +94,32 @@ def register_tools(mcp):
             }
     
     # Store tools in the MCP instance
+    # Be defensive about how to register - different FastApiMCP versions may vary
+    tools_registered = False
+    
     if hasattr(mcp, 'tools'):
-        mcp.tools['list_available_pdfs'] = list_available_pdfs
-        mcp.tools['analyze_financial_pdf'] = analyze_financial_pdf_mcp
+        tools_attr = getattr(mcp, 'tools', None)
+        # Check if it's a dict before trying to assign
+        if isinstance(tools_attr, dict):
+            tools_attr['list_available_pdfs'] = list_available_pdfs
+            tools_attr['analyze_financial_pdf'] = analyze_financial_pdf_mcp
+            tools_registered = True
+    
+    # Alternative registration methods
+    if not tools_registered:
+        if hasattr(mcp, 'tool'):
+            # Try using decorator/registration method if available
+            try:
+                mcp.tool()(list_available_pdfs)
+                mcp.tool()(analyze_financial_pdf_mcp)
+                tools_registered = True
+            except:
+                pass
+        
+        # As a fallback, try setting as attributes
+        if not tools_registered:
+            try:
+                setattr(mcp, '_list_available_pdfs', list_available_pdfs)
+                setattr(mcp, '_analyze_financial_pdf', analyze_financial_pdf_mcp)
+            except:
+                pass
