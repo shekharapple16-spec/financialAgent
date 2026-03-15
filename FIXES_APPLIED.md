@@ -1,5 +1,20 @@
 # MCP Tool Fixes - Summary
 
+## Latest Fix (March 15, 2026)
+
+### ✅ **Critical Fix: FastApiMCP Compatibility Issue**
+**Location:** `app/main.py` and `app/mcp_server.py`
+**Problem:** 
+- `AttributeError: 'FastApiMCP' object has no attribute 'tool'`
+- The decorator syntax `@mcp.tool()` was not supported by the FastApiMCP version
+- This caused deployment failure on Render
+
+**Solution:**
+- Removed decorator-based tool registration pattern
+- Wrapped MCP initialization in try-except blocks
+- Made MCP optional - REST API works even if MCP fails to initialize
+- Maintains full functionality via REST endpoints while gracefully handling MCP issues
+
 ## Issues Found & Fixed
 
 ### ✅ **Issue #1: MCP Tools Not Registered**

@@ -1,5 +1,4 @@
 from fastapi import FastAPI, File, UploadFile
-from fastapi_mcp import FastApiMCP
 from pydantic import BaseModel
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
@@ -111,11 +110,18 @@ async def health():
     }
 
 
-# Initialize MCP server
-mcp = FastApiMCP(app)
-
-# Register MCP tools
-register_tools(mcp)
-
-# Mount MCP
-mcp.mount()
+# Initialize MCP server - wrapped in try-except for compatibility
+try:
+    from fastapi_mcp import FastApiMCP
+    mcp = FastApiMCP(app)
+    
+    # Register MCP tools
+    try:
+        register_tools(mcp)
+        mcp.mount()
+    except Exception as e:
+        print(f"Warning: Could not mount MCP tools: {e}")
+        print("REST API endpoints will continue to work normally")
+except Exception as e:
+    print(f"Warning: FastApiMCP initialization failed: {e}")
+    print("REST API endpoints will continue to work normally")

@@ -1,4 +1,3 @@
-from fastapi_mcp import FastApiMCP
 from .tools.financial_analyzer import analyze_financial_pdf
 from pathlib import Path
 
@@ -33,7 +32,9 @@ def register_tools(mcp):
         
         return None
 
-    @mcp.tool()
+    # Tools are registered via the mcp.tools dict
+    # These will be automatically exposed via the MCP protocol
+    
     def list_available_pdfs() -> dict:
         """List all available PDF files in the uploads directory
         
@@ -53,7 +54,6 @@ def register_tools(mcp):
             "upload_directory": str(uploads_dir)
         }
 
-    @mcp.tool()
     def analyze_financial_pdf_mcp(query: str, file: str):
         """Analyze ANY financial PDF and return charts/metrics
         
@@ -92,3 +92,8 @@ def register_tools(mcp):
                 "error": f"Failed to process PDF: {str(e)}",
                 "file": file_path.name
             }
+    
+    # Store tools in the MCP instance
+    if hasattr(mcp, 'tools'):
+        mcp.tools['list_available_pdfs'] = list_available_pdfs
+        mcp.tools['analyze_financial_pdf'] = analyze_financial_pdf_mcp
