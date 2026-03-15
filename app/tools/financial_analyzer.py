@@ -5,7 +5,11 @@ from .embedding_service import EmbeddingService
 import pdfplumber
 import io
 import re
+import logging
+import time
 
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 embedding_service = EmbeddingService()
 
@@ -20,10 +24,15 @@ def analyze_financial_pdf(query, pdf_bytes):
     Returns:
         Dictionary with analysis results including charts and metrics
     """
+    logger.info(f"Starting analysis for query: {query}")
+    start_time = time.time()
+    
     intent = detect_intent(query)
+    logger.info(f"Detected intent: {intent}")
     
     # Extract financial sections using semantic analysis
     sections = embedding_service.extract_financial_sections(pdf_bytes)
+    logger.info(f"Sections extracted: {list(sections.keys())}")
     
     # Extract numbers from each section
     metrics = {}
@@ -72,8 +81,10 @@ def analyze_financial_pdf(query, pdf_bytes):
     
     # Determine chart type based on intent and available metrics
     chart_type, data_to_plot = detect_chart_type(intent, metrics)
+    logger.info(f"Selected chart type: {chart_type}")
     
     if chart_type == "none":
+        logger.warning("No relevant data found for query")
         return {
             "message": "No relevant data found for your query",
             "intent": intent,
@@ -82,6 +93,7 @@ def analyze_financial_pdf(query, pdf_bytes):
         }
     
     # Generate appropriate chart
+    logger.info("Generating chart...")
     chart = generate_chart(data_to_plot, chart_type)
     
     result = {
@@ -123,5 +135,9 @@ def analyze_financial_pdf(query, pdf_bytes):
         result["metric"] = "growth"
         if "growth" in metrics:
             result["growth_data"] = metrics["growth"]
+    
+    elapsed = time.time() - start_time
+    result["processing_time_seconds"] = elapsed
+    logger.info(f"Analysis completed in {elapsed:.2f}s")
     
     return result

@@ -5,6 +5,12 @@ from typing import List, Dict, Tuple
 import re
 import pdfplumber
 import io
+import logging
+import time
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingService:
@@ -14,9 +20,13 @@ class EmbeddingService:
         api_key = os.getenv("NVIDIA_API_KEY", "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")
         self.client = OpenAI(
             api_key=api_key,
-            base_url="https://integrate.api.nvidia.com/v1"
+            base_url="https://integrate.api.nvidia.com/v1",
+            timeout=30.0  # 30 second timeout for API calls
         )
         self.model = "nvidia/nv-embedcode-7b-v1"
+        self.embedding_cache = {}  # Cache embeddings to avoid redundant API calls
+        self.pdf_cache = {}  # Cache PDF extractions by file hash
+        logger.info("EmbeddingService initialized")
     
     def get_embedding(self, text: str) -> List[float]:
         """Get embedding for a text query
@@ -27,16 +37,31 @@ class EmbeddingService:
         Returns:
             Embedding vector as list of floats
         """
+        # Check cache first
+        if text in self.embedding_cache:
+            return self.embedding_cache[text]
+        
         try:
+            logger.info(f"Requesting embedding for: {text[:50]}...")
+            start_time = time.time()
+            
             response = self.client.embeddings.create(
                 input=[text],
                 model=self.model,
                 encoding_format="float",
                 extra_body={"input_type": "query", "truncate": "NONE"}
             )
-            return response.data[0].embedding
+            
+            elapsed = time.time() - start_time
+            logger.info(f"Embedding received in {elapsed:.2f}s")
+            
+            embedding = response.data[0].embedding
+            self.embedding_cache[text] = embedding  # Cache result
+            return embedding
+            
         except Exception as e:
-            print(f"Error getting embedding: {str(e)}")
+            logger.error(f"Error getting embedding: {str(e)}")
+            logger.warning("Falling back to keyword-based categorization")
             return []
     
     def extract_financial_sections(self, pdf_bytes: bytes) -> Dict[str, List[str]]:
@@ -48,6 +73,13 @@ class EmbeddingService:
         Returns:
             Dictionary with identified financial sections
         """
+        # Check cache using file hash
+        import hashlib
+        file_hash = hashlib.md5(pdf_bytes).hexdigest()
+        if file_hash in self.pdf_cache:
+            logger.info("Using cached PDF extraction")
+            return self.pdf_cache[file_hash]
+        
         sections = {
             "revenue": [],
             "profit": [],
@@ -61,7 +93,12 @@ class EmbeddingService:
         }
         
         try:
+            logger.info("Starting PDF extraction...")
+            start_time = time.time()
+            
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                logger.info(f"PDF loaded with {len(pdf.pages)} pages")
+                
                 for page_num, page in enumerate(pdf.pages):
                     text = page.extract_text()
                     tables = page.extract_tables()
@@ -69,20 +106,14 @@ class EmbeddingService:
                     if text:
                         # Split into lines for analysis
                         lines = text.split("\n")
+                        logger.info(f"Page {page_num + 1}: {len(lines)} lines extracted")
                         
                         for line in lines:
-                            if not line.strip():
+                            if not line.strip() or len(line.strip()) < 5:
                                 continue
                             
-                            # Get embedding for this line
-                            line_embedding = self.get_embedding(line)
-                            
-                            if line_embedding:
-                                # Categorize based on semantic similarity
-                                self._categorize_line(line, line_embedding, sections)
-                            else:
-                                # Fallback to keyword matching
-                                self._categorize_by_keyword(line, sections)
+                            # Use keyword-based categorization first (faster)
+                            self._categorize_by_keyword(line, sections)
                     
                     # Store tables as raw data
                     if tables:
@@ -91,31 +122,54 @@ class EmbeddingService:
                                 "page": page_num,
                                 "data": table
                             })
-        
+                        logger.info(f"Page {page_num + 1}: {len(tables)} tables extracted")
+            
+            elapsed = time.time() - start_time
+            logger.info(f"PDF extraction completed in {elapsed:.2f}s")
+            logger.info(f"Sections found: {[(k, len(v)) for k, v in sections.items() if v]}")
+            
+            # Cache the result
+            self.pdf_cache[file_hash] = sections
+            
         except Exception as e:
-            print(f"Error extracting sections: {str(e)}")
+            logger.error(f"Error extracting sections: {str(e)}")
         
         return sections
     
     def _categorize_by_keyword(self, line: str, sections: Dict):
-        """Fallback keyword-based categorization"""
+        """Keyword-based categorization (fast and reliable)"""
         line_lower = line.lower()
         
-        if "revenue" in line_lower:
+        # Revenue keywords
+        if any(kw in line_lower for kw in ["revenue", "sales", "turnover", "total revenue", "net sales", "operating revenue"]):
             sections["revenue"].append(line)
-        if "profit" in line_lower or "earnings" in line_lower:
+        
+        # Profit keywords
+        if any(kw in line_lower for kw in ["profit", "earnings", "net income", "net profit", "operating income", "ebit"]):
             sections["profit"].append(line)
-        if "income" in line_lower:
+        
+        # Income keywords
+        if any(kw in line_lower for kw in ["income", "income statement", "total income"]):
             sections["income"].append(line)
-        if "expense" in line_lower or "cost" in line_lower:
+        
+        # Expense keywords
+        if any(kw in line_lower for kw in ["expense", "cost", "cogs", "cost of goods", "operating expense", "sg&a"]):
             sections["expenses"].append(line)
-        if "balance" in line_lower or "assets" in line_lower or "liabilities" in line_lower:
+        
+        # Balance sheet keywords
+        if any(kw in line_lower for kw in ["balance", "assets", "liabilities", "equity", "stockholders equity"]):
             sections["balance"].append(line)
-        if "cash flow" in line_lower:
+        
+        # Cash flow keywords
+        if any(kw in line_lower for kw in ["cash flow", "operating cash", "investing cash", "financing cash"]):
             sections["cash_flow"].append(line)
-        if "margin" in line_lower:
+        
+        # Margin keywords
+        if any(kw in line_lower for kw in ["margin", "gross margin", "operating margin", "net margin", "%"]):
             sections["margins"].append(line)
-        if "growth" in line_lower or "increase" in line_lower or "increase" in line_lower:
+        
+        # Growth keywords
+        if any(kw in line_lower for kw in ["growth", "increased", "decrease", "change", "vs", "variance", "year-over-year", "yoy"]):
             sections["growth"].append(line)
     
     def _categorize_line(self, line: str, embedding: List[float], sections: Dict):
@@ -185,7 +239,7 @@ class EmbeddingService:
         return dot_product / (mag1 * mag2)
     
     def extract_numbers_from_lines(self, lines: List[str]) -> Tuple[List[float], List[str]]:
-        """Extract numerical values from text lines
+        """Extract numerical values from text lines with better filtering
         
         Args:
             lines: List of text lines
@@ -197,13 +251,23 @@ class EmbeddingService:
         labels = []
         
         for line in lines:
-            # Extract numbers with context
-            pattern = r'([A-Za-z\s]+?)[\s:]*(-?\d[\d,]*\.?\d*[KMB]?)'
+            # Skip very short or very long lines
+            if len(line.strip()) < 10 or len(line.strip()) > 300:
+                continue
+            
+            # Extract numbers with context - look for financial values
+            # Pattern: Label followed by number (possibly with K/M/B)
+            pattern = r'([A-Za-z\s\(\)]+?)[\s:]*(-?\d[\d,]*\.?\d*[KMB]?)\s*(?:\(|\[|$|%|,)'
             matches = re.finditer(pattern, line)
             
+            found_any = False
             for match in matches:
                 label = match.group(1).strip()
                 value_str = match.group(2).strip()
+                
+                # Skip very small labels (likely noise)
+                if len(label) < 3:
+                    continue
                 
                 try:
                     # Convert K, M, B suffixes
@@ -219,33 +283,55 @@ class EmbeddingService:
                         value_str = value_str[:-1]
                     
                     value = float(value_str.replace(",", "")) * multiplier
+                    
+                    # Filter outliers - skip values that are clearly not financial metrics
+                    # (years, percentages, IDs, etc.)
+                    if value < 100 or value > 1_000_000_000_000:
+                        continue
+                    
                     numbers.append(value)
                     labels.append(label if label else f"Value {len(numbers)}")
+                    found_any = True
                 except:
                     pass
             
-            # Fallback: extract all numbers
-            if not matches:
+            # Only extract remaining numbers if we didn't find labeled ones
+            if not found_any:
                 number_pattern = r'-?\d[\d,]*\.?\d*[KMB]?'
-                number_matches = re.finditer(number_pattern, line)
-                for match in number_matches:
-                    value_str = match.group(0).strip()
-                    try:
-                        multiplier = 1
-                        if value_str.endswith('K'):
-                            multiplier = 1_000
-                            value_str = value_str[:-1]
-                        elif value_str.endswith('M'):
-                            multiplier = 1_000_000
-                            value_str = value_str[:-1]
-                        elif value_str.endswith('B'):
-                            multiplier = 1_000_000_000
-                            value_str = value_str[:-1]
-                        
-                        value = float(value_str.replace(",", "")) * multiplier
-                        numbers.append(value)
-                        labels.append(f"Value {len(numbers)}")
-                    except:
-                        pass
+                number_matches = list(re.finditer(number_pattern, line))
+                # Only take if there's exactly 1-2 numbers in the line
+                if 0 < len(number_matches) <= 2:
+                    for match in number_matches:
+                        value_str = match.group(0).strip()
+                        try:
+                            multiplier = 1
+                            if value_str.endswith('K'):
+                                multiplier = 1_000
+                                value_str = value_str[:-1]
+                            elif value_str.endswith('M'):
+                                multiplier = 1_000_000
+                                value_str = value_str[:-1]
+                            elif value_str.endswith('B'):
+                                multiplier = 1_000_000_000
+                                value_str = value_str[:-1]
+                            
+                            value = float(value_str.replace(",", "")) * multiplier
+                            
+                            # Filter outliers
+                            if value < 100 or value > 1_000_000_000_000:
+                                continue
+                            
+                            numbers.append(value)
+                            labels.append(f"Value {len(numbers)}")
+                        except:
+                            pass
+        
+        # Return top 10 values only for cleaner charts
+        if len(numbers) > 10:
+            logger.info(f"Filtering {len(numbers)} values down to top 10")
+            # Sort and take top 10 by absolute value
+            sorted_indices = sorted(range(len(numbers)), key=lambda i: abs(numbers[i]), reverse=True)[:10]
+            numbers = [numbers[i] for i in sorted(sorted_indices)]
+            labels = [labels[i] for i in sorted(sorted_indices)]
         
         return numbers, labels

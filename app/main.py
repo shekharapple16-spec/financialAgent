@@ -2,9 +2,17 @@ from fastapi import FastAPI, File, UploadFile
 from pydantic import BaseModel
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
+import logging
 
 from .tools.financial_analyzer import analyze_financial_pdf
 from .mcp_server import register_tools
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Financial Chart Agent")
 
@@ -37,6 +45,8 @@ async def upload_pdf(file: UploadFile = File(...)):
     Returns:
         Confirmation with filename
     """
+    logger.info(f"Upload request: {file.filename}")
+    
     if not file.filename.lower().endswith('.pdf'):
         return {"error": "Only PDF files are allowed"}
     
@@ -45,6 +55,7 @@ async def upload_pdf(file: UploadFile = File(...)):
     try:
         contents = await file.read()
         file_path.write_bytes(contents)
+        logger.info(f"File uploaded successfully: {file.filename} ({len(contents)} bytes)")
         return {
             "message": f"File uploaded successfully",
             "filename": file.filename,
@@ -52,6 +63,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             "size_bytes": len(contents)
         }
     except Exception as e:
+        logger.error(f"Upload failed: {str(e)}")
         return {"error": f"Failed to upload file: {str(e)}"}
 
 
@@ -63,6 +75,8 @@ async def analyze(req: AnalyzeRequest):
         query: Analysis query (e.g., 'revenue growth')
         file: PDF filename in uploads directory
     """
+    logger.info(f"Analysis request: query='{req.query}', file='{req.file}'")
+    
     # Resolve file path from uploads directory
     pdf_path = uploads_dir / req.file
     
@@ -71,27 +85,35 @@ async def analyze(req: AnalyzeRequest):
         pdf_path = uploads_dir / f"{req.file}.pdf"
     
     if not pdf_path.exists():
+        logger.warning(f"File not found: {req.file}")
         return {
             "error": f"File not found: {req.file}",
             "upload_directory": str(uploads_dir)
         }
 
     try:
+        logger.info(f"Reading PDF: {pdf_path}")
         contents = pdf_path.read_bytes()
+        logger.info(f"PDF size: {len(contents)} bytes")
+        logger.info(f"Starting analysis...")
         result = analyze_financial_pdf(req.query, contents)
         result["file_analyzed"] = pdf_path.name
+        logger.info(f"Analysis complete: intent={result.get('intent')}, chart_type={result.get('chart_type')}")
         return result
     except Exception as e:
+        logger.error(f"Analysis failed: {str(e)}", exc_info=True)
         return {"error": f"Analysis failed: {str(e)}"}
 
 
 @app.get("/pdfs")
 async def list_pdfs():
     """List all available PDF files"""
+    logger.info("Listing available PDFs")
     if not uploads_dir.exists():
         return {"pdfs": [], "count": 0}
     
     pdfs = [f.name for f in uploads_dir.glob("*.pdf")]
+    logger.info(f"Found {len(pdfs)} PDFs")
     return {
         "pdfs": sorted(pdfs),
         "count": len(pdfs),
@@ -102,11 +124,32 @@ async def list_pdfs():
 @app.get("/health")
 async def health():
     """Health check endpoint"""
+    logger.info("Health check requested")
     return {
         "status": "healthy",
         "service": "Financial Chart Agent",
         "uploads_directory": str(uploads_dir),
-        "mcp_endpoint": "/mcp"
+        "mcp_endpoint": "/mcp",
+        "version": "1.1-with-embeddings"
+    }
+
+
+@app.get("/status")
+async def status():
+    """API status endpoint"""
+    pdfs = [f.name for f in uploads_dir.glob("*.pdf")] if uploads_dir.exists() else []
+    return {
+        "status": "running",
+        "pdfs_available": len(pdfs),
+        "latest_pdf": pdfs[0] if pdfs else None,
+        "supported_intents": [
+            "profitability",
+            "comparison", 
+            "revenue_growth",
+            "profit_trend",
+            "growth_analysis",
+            "summary"
+        ]
     }
 
 
@@ -122,11 +165,11 @@ try:
             mcp.mount()
     except (TypeError, AttributeError, KeyError) as e:
         # Known issue: mcp.tools might be a list or have incompatible type
-        print(f"Warning: Could not mount MCP tools: {type(e).__name__}: {e}")
-        print("REST API endpoints will continue to work normally")
+        logger.warning(f"Could not mount MCP tools: {type(e).__name__}: {e}")
+        logger.info("REST API endpoints will continue to work normally")
     except Exception as e:
-        print(f"Warning: Could not mount MCP tools: {e}")
-        print("REST API endpoints will continue to work normally")
+        logger.warning(f"Could not mount MCP tools: {e}")
+        logger.info("REST API endpoints will continue to work normally")
 except Exception as e:
-    print(f"Warning: FastApiMCP initialization failed: {e}")
-    print("REST API endpoints will continue to work normally")
+    logger.warning(f"FastApiMCP initialization failed: {e}")
+    logger.info("REST API endpoints will continue to work normally")
