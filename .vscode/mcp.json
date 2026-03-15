@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "financial-agent": {
+      "type": "http",
+      "url": "https://financialagent-g2qu.onrender.com/mcp"
+    }
+  }
+}
